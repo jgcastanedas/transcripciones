@@ -154,6 +154,37 @@
   .seg-v .t { color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; margin-bottom: 6px; }
   .seg-v .x { font-size: 14px; line-height: 1.55; }
 
+  /* ── Preview + selector de rango ── */
+  .preview-wrap { margin-top: 14px; }
+  #v-preview {
+    width: 100%; max-height: 280px; border-radius: 10px;
+    background: #000; display: block;
+  }
+  .range-selector { margin-top: 14px; }
+  .range-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .range-label { font-size: 13px; color: var(--muted); width: 44px; flex-shrink: 0; }
+  .time-input {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px;
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-variant-numeric: tabular-nums; width: 108px;
+  }
+  .time-input:focus { outline: none; border-color: var(--accent); }
+  .btn.sm { padding: 7px 12px; font-size: 13px; font-weight: 500; }
+  .timeline-track {
+    height: 8px; background: var(--panel-2); border-radius: 4px;
+    position: relative; margin: 12px 0 6px; border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .timeline-selection {
+    position: absolute; height: 100%; background: var(--accent-2);
+    border-radius: 4px; pointer-events: none; transition: left .08s, width .08s;
+  }
+  .range-summary { font-size: 12px; color: var(--muted); }
+  .range-summary strong { color: var(--text); }
+
   /* ── Divisor de partes ── */
   .chunk-divider {
     display: flex;
@@ -271,6 +302,28 @@
         <div class="file-name" id="v-fileName"></div>
       </div>
       <input type="file" id="v-file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" hidden>
+
+      <!-- Preview + selector de rango — visible tras seleccionar archivo -->
+      <div id="v-preview-wrap" class="preview-wrap" style="display:none;">
+        <video id="v-preview" controls preload="metadata"></video>
+
+        <div class="range-selector">
+          <div class="range-row">
+            <span class="range-label">Inicio</span>
+            <input type="text" id="v-start-input" class="time-input" value="0:00">
+            <button class="btn secondary sm" id="v-mark-start">↓ Posición actual</button>
+          </div>
+          <div class="range-row">
+            <span class="range-label">Fin</span>
+            <input type="text" id="v-end-input" class="time-input" placeholder="fin del video">
+            <button class="btn secondary sm" id="v-mark-end">↓ Posición actual</button>
+          </div>
+          <div class="timeline-track" id="v-timeline-track">
+            <div id="v-timeline-sel" class="timeline-selection"></div>
+          </div>
+          <div class="range-summary" id="v-range-summary"></div>
+        </div>
+      </div>
 
       <div class="row" style="margin-top:18px;">
         <div>
@@ -445,20 +498,105 @@ aDl.addEventListener('click', () => {
 });
 
 // ─── VIDEO TAB ───────────────────────────────────────────────────────
-const vDrop   = document.getElementById('v-drop');
-const vFileIn = document.getElementById('v-file');
-const vFileEl = document.getElementById('v-fileName');
-const vGo     = document.getElementById('v-go');
-const vSt     = document.getElementById('v-status');
-const vOut    = document.getElementById('v-output');
-const vMeta   = document.getElementById('v-meta');
-const vCopy   = document.getElementById('v-copy');
-const vDl     = document.getElementById('v-download');
+const vDrop        = document.getElementById('v-drop');
+const vFileIn      = document.getElementById('v-file');
+const vFileEl      = document.getElementById('v-fileName');
+const vGo          = document.getElementById('v-go');
+const vSt          = document.getElementById('v-status');
+const vOut         = document.getElementById('v-output');
+const vMeta        = document.getElementById('v-meta');
+const vCopy        = document.getElementById('v-copy');
+const vDl          = document.getElementById('v-download');
+const vPreviewWrap = document.getElementById('v-preview-wrap');
+const vPreview     = document.getElementById('v-preview');
+const vStartInput  = document.getElementById('v-start-input');
+const vEndInput    = document.getElementById('v-end-input');
+const vMarkStart   = document.getElementById('v-mark-start');
+const vMarkEnd     = document.getElementById('v-mark-end');
+const vTimelineSel = document.getElementById('v-timeline-sel');
+const vRangeSummary = document.getElementById('v-range-summary');
 
-let vFile = null, vSegs = [];
+let vFile = null, vSegs = [], vStartSec = 0, vEndSec = 0, vDuration = 0;
+let vPrevObjectURL = null;
 
 function vStatus(msg, cls) { vSt.className = 'status-msg ' + (cls || ''); vSt.innerHTML = msg; }
 
+// ── Helpers de tiempo ───────────────────────────────────────────────
+function secToHMS(s) {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${m}:${String(sec).padStart(2,'0')}`;
+}
+function hmsToSec(str) {
+  const parts = str.trim().split(':').map(Number);
+  if (parts.some(isNaN)) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0];
+}
+
+// ── Actualizar barra de rango ────────────────────────────────────────
+function updateRangeUI() {
+  const end = vEndSec > 0 ? vEndSec : vDuration;
+  const dur = Math.max(0, end - vStartSec);
+  if (vDuration > 0) {
+    vTimelineSel.style.left  = (vStartSec / vDuration * 100) + '%';
+    vTimelineSel.style.width = (dur / vDuration * 100) + '%';
+  }
+  const totalFmt = secToHMS(vDuration);
+  const selFmt   = secToHMS(dur);
+  const startFmt = secToHMS(vStartSec);
+  const endFmt   = secToHMS(end);
+  vRangeSummary.innerHTML = `<strong>${startFmt} → ${endFmt}</strong> &nbsp;·&nbsp; ${selFmt} seleccionados de ${totalFmt}`;
+  vGo.textContent = 'Procesar selección';
+}
+
+// ── Clic en barra de timeline para navegar ───────────────────────────
+document.getElementById('v-timeline-track').addEventListener('click', e => {
+  if (!vDuration) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct  = (e.clientX - rect.left) / rect.width;
+  vPreview.currentTime = pct * vDuration;
+});
+
+// ── Eventos del video preview ────────────────────────────────────────
+vPreview.addEventListener('loadedmetadata', () => {
+  vDuration = vPreview.duration;
+  vEndSec   = vDuration;
+  vEndInput.value = secToHMS(vDuration);
+  updateRangeUI();
+});
+vPreview.addEventListener('timeupdate', () => {
+  if (!vDuration) return;
+  const pct = vPreview.currentTime / vDuration;
+  // sombra tenue del cursor de reproducción — no altera la selección
+  vTimelineSel.style.setProperty('--play-pct', (pct * 100) + '%');
+});
+
+// ── Marcar inicio/fin en posición actual ────────────────────────────
+vMarkStart.addEventListener('click', () => {
+  vStartSec = vPreview.currentTime;
+  vStartInput.value = secToHMS(vStartSec);
+  updateRangeUI();
+});
+vMarkEnd.addEventListener('click', () => {
+  vEndSec = vPreview.currentTime;
+  vEndInput.value = secToHMS(vEndSec);
+  updateRangeUI();
+});
+
+// ── Edición manual de tiempos ────────────────────────────────────────
+vStartInput.addEventListener('change', () => {
+  const s = hmsToSec(vStartInput.value);
+  if (s !== null && s >= 0 && s < vDuration) { vStartSec = s; updateRangeUI(); }
+});
+vEndInput.addEventListener('change', () => {
+  const s = hmsToSec(vEndInput.value);
+  if (s !== null && s > 0 && s <= vDuration) { vEndSec = s; updateRangeUI(); }
+});
+
+// ── Selección de archivo ─────────────────────────────────────────────
 vDrop.addEventListener('click', () => vFileIn.click());
 vDrop.addEventListener('dragover', e => { e.preventDefault(); vDrop.classList.add('over'); });
 vDrop.addEventListener('dragleave', () => vDrop.classList.remove('over'));
@@ -471,21 +609,37 @@ vFileIn.addEventListener('change', () => { if (vFileIn.files[0]) vPickFile(vFile
 function vPickFile(f) {
   vFile = f;
   vFileEl.textContent = '🎬 ' + f.name + '  (' + (f.size / 1048576).toFixed(1) + ' MB)';
+
+  // Preview instantáneo sin upload
+  if (vPrevObjectURL) URL.revokeObjectURL(vPrevObjectURL);
+  vPrevObjectURL = URL.createObjectURL(f);
+  vPreview.src = vPrevObjectURL;
+  vPreviewWrap.style.display = 'block';
+
+  vStartSec = 0; vEndSec = 0; vDuration = 0;
+  vStartInput.value = '0:00';
+  vEndInput.value   = '';
+
   vGo.disabled = false;
   vStatus('');
 }
 
+// ── Procesar ─────────────────────────────────────────────────────────
 vGo.addEventListener('click', async () => {
   if (!vFile) return;
   vSegs = []; vOut.innerHTML = ''; vMeta.textContent = '';
   vCopy.disabled = true; vDl.disabled = true; vGo.disabled = true;
-  vStatus(spin() + 'Iniciando…');
+  vStatus(spin() + 'Subiendo video…');
+
+  const endSec = vEndSec > vStartSec ? vEndSec : vDuration;
 
   const fd = new FormData();
   fd.append('video', vFile);
-  fd.append('model', document.getElementById('v-model').value);
-  fd.append('language', document.getElementById('v-language').value);
+  fd.append('model',         document.getElementById('v-model').value);
+  fd.append('language',      document.getElementById('v-language').value);
   fd.append('chunk_minutes', document.getElementById('v-chunk').value);
+  fd.append('start_sec',     vStartSec.toFixed(2));
+  fd.append('end_sec',       endSec.toFixed(2));
 
   try {
     const resp = await fetch('/process-video', { method: 'POST', body: fd });
@@ -504,38 +658,25 @@ vGo.addEventListener('click', async () => {
         vOut.appendChild(div);
       } else if (ev.type === 'segment') {
         vSegs.push(ev);
-
         const row = document.createElement('div');
         row.className = 'seg-v';
-
         if (ev.screenshot) {
           const thumb = document.createElement('div');
           thumb.className = 'thumb';
           const img = document.createElement('img');
-          img.src = ev.screenshot;
-          img.loading = 'lazy';
-          img.alt = 'fotograma ' + ev.start;
+          img.src = ev.screenshot; img.loading = 'lazy'; img.alt = 'fotograma ' + ev.start;
           thumb.appendChild(img);
           const shot = ev.screenshot;
           thumb.addEventListener('click', () => openLightbox(shot));
           row.appendChild(thumb);
         } else {
-          const empty = document.createElement('div');
-          empty.className = 'thumb-empty';
+          const empty = document.createElement('div'); empty.className = 'thumb-empty';
           row.appendChild(empty);
         }
-
-        const body = document.createElement('div');
-        body.className = 'seg-body';
-        const ts = document.createElement('div');
-        ts.className = 't';
-        ts.textContent = ev.start + ' → ' + ev.end;
-        const tx = document.createElement('div');
-        tx.className = 'x';
-        tx.textContent = ev.text;
-        body.append(ts, tx);
-        row.appendChild(body);
-
+        const body = document.createElement('div'); body.className = 'seg-body';
+        const ts = document.createElement('div'); ts.className = 't'; ts.textContent = ev.start + ' → ' + ev.end;
+        const tx = document.createElement('div'); tx.className = 'x'; tx.textContent = ev.text;
+        body.append(ts, tx); row.appendChild(body);
         vOut.appendChild(row);
         row.scrollIntoView({ block: 'nearest' });
         vCopy.disabled = false; vDl.disabled = false;

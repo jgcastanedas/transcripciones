@@ -174,6 +174,8 @@ def process_video():
     model_name = request.form.get("model", "medium")
     language   = request.form.get("language", "es").strip() or None
     chunk_mins = int(request.form.get("chunk_minutes", "0") or "0")
+    start_sec  = float(request.form.get("start_sec", "0") or "0")
+    end_sec    = float(request.form.get("end_sec",   "0") or "0")
     if language == "auto":
         language = None
 
@@ -192,17 +194,26 @@ def process_video():
             video_mb       = os.path.getsize(tmp_video.name) // 1024 // 1024
             total_duration = get_video_duration(tmp_video.name)
 
+            # ── Determinar rango a procesar ──────────────────────────
+            proc_start = max(0.0, start_sec)
+            proc_end   = end_sec if end_sec > proc_start else total_duration
+            proc_dur   = proc_end - proc_start
+
+            range_label = ""
+            if proc_start > 0 or proc_end < total_duration:
+                range_label = f" [{fmt_ts(proc_start)} → {fmt_ts(proc_end)}]"
+
             # ── Calcular rangos de tiempo ────────────────────────────
-            if chunk_mins > 0 and total_duration > 0:
+            if chunk_mins > 0 and proc_dur > 0:
                 chunk_secs = chunk_mins * 60
-                n_chunks   = math.ceil(total_duration / chunk_secs)
-                offsets    = [i * chunk_secs for i in range(n_chunks)]
-                yield _sse({"type": "status", "message": f"Video de {video_mb} MB ({fmt_ts(total_duration)}) → {n_chunks} partes de {chunk_mins} min"})
+                n_chunks   = math.ceil(proc_dur / chunk_secs)
+                offsets    = [proc_start + i * chunk_secs for i in range(n_chunks)]
+                yield _sse({"type": "status", "message": f"Video de {video_mb} MB{range_label} → {n_chunks} partes de {chunk_mins} min"})
             else:
-                chunk_secs = None
-                offsets    = [0.0]
+                chunk_secs = proc_dur if proc_dur > 0 else None
+                offsets    = [proc_start]
                 n_chunks   = 1
-                yield _sse({"type": "status", "message": f"Video de {video_mb} MB ({fmt_ts(total_duration)}). Cargando modelo…"})
+                yield _sse({"type": "status", "message": f"Video de {video_mb} MB{range_label}. Cargando modelo…"})
 
             yield _sse({"type": "status", "message": f"Cargando modelo '{model_name}'…"})
             model = get_model(model_name)
@@ -219,11 +230,15 @@ def process_video():
                 tmp_audio.close()
                 audio_paths.append(tmp_audio.name)
 
+                # el último chunk puede ser más corto que chunk_secs
+                remaining  = proc_end - start_offset
+                actual_dur = min(chunk_secs, remaining) if chunk_secs else None
+
                 try:
                     extract_audio_range(
                         tmp_video.name, tmp_audio.name,
                         start_sec=start_offset,
-                        duration_sec=chunk_secs,
+                        duration_sec=actual_dur,
                     )
                 except RuntimeError as exc:
                     lines = [l for l in str(exc).splitlines() if l.strip()]
