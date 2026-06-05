@@ -6,8 +6,8 @@ Levanta una web en http://127.0.0.1:5005. Todo el procesamiento es LOCAL.
 
 import base64
 import json
+import math
 import os
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -50,47 +50,6 @@ def check_ffmpeg() -> bool:
         return False
 
 
-def extract_audio(video_path: str, audio_path: str) -> None:
-    result = subprocess.run(
-        ["ffmpeg", "-y", "-i", video_path,
-         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path],
-        capture_output=True, timeout=600,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
-
-
-def split_video(video_path: str, chunk_seconds: int, out_dir: str):
-    """Divide el video en partes de chunk_seconds sin recodificar. Devuelve lista ordenada de paths."""
-    total = get_video_duration(video_path)
-    if total <= 0:
-        raise RuntimeError("No se pudo determinar la duración del video")
-
-    ext = os.path.splitext(video_path)[1] or ".mp4"
-    chunks = []
-    offset = 0.0
-    idx = 0
-
-    while offset < total:
-        chunk_path = os.path.join(out_dir, f"chunk_{idx:03d}{ext}")
-        result = subprocess.run(
-            ["ffmpeg", "-y",
-             "-ss", str(offset),
-             "-i", video_path,
-             "-t", str(chunk_seconds),
-             "-c", "copy",
-             chunk_path],
-            capture_output=True, timeout=600,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode(errors="replace").strip())
-        chunks.append(chunk_path)
-        offset += chunk_seconds
-        idx += 1
-
-    return chunks
-
-
 def get_video_duration(video_path: str) -> float:
     try:
         result = subprocess.run(
@@ -104,6 +63,19 @@ def get_video_duration(video_path: str) -> float:
     except Exception:
         pass
     return 0.0
+
+
+def extract_audio_range(video_path: str, audio_path: str,
+                        start_sec: float = 0.0, duration_sec: float = None) -> None:
+    """Extrae audio del video original en el rango [start_sec, start_sec+duration_sec]."""
+    cmd = ["ffmpeg", "-y", "-ss", str(start_sec), "-i", video_path]
+    if duration_sec is not None:
+        cmd += ["-t", str(duration_sec)]
+    cmd += ["-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path]
+
+    result = subprocess.run(cmd, capture_output=True, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
 
 
 def extract_frame(video_path: str, timestamp: float):
@@ -134,8 +106,7 @@ def transcribe_audio(model, audio_path: str, language):
         )
         return segments, info
     except Exception:
-        segments, info = model.transcribe(audio_path, language=language)
-        return segments, info
+        return model.transcribe(audio_path, language=language)
 
 
 @app.route("/")
@@ -200,9 +171,9 @@ def process_video():
         return {"error": "No se recibió ningún archivo de video."}, 400
 
     f = request.files["video"]
-    model_name  = request.form.get("model", "medium")
-    language    = request.form.get("language", "es").strip() or None
-    chunk_mins  = int(request.form.get("chunk_minutes", "0") or "0")
+    model_name = request.form.get("model", "medium")
+    language   = request.form.get("language", "es").strip() or None
+    chunk_mins = int(request.form.get("chunk_minutes", "0") or "0")
     if language == "auto":
         language = None
 
@@ -212,54 +183,51 @@ def process_video():
     tmp_video.close()
 
     def generate():
-        tmp_dir     = None
         audio_paths = []
         try:
             if not check_ffmpeg():
                 yield _sse({"type": "error", "message": "ffmpeg no encontrado. Instálalo con: brew install ffmpeg"})
                 return
 
-            video_mb = os.path.getsize(tmp_video.name) // 1024 // 1024
-
-            # ── Dividir en partes si se pidió ────────────────────────
-            if chunk_mins > 0:
-                yield _sse({"type": "status", "message": f"Dividiendo video de {video_mb} MB en partes de {chunk_mins} min…"})
-                tmp_dir = tempfile.mkdtemp()
-                try:
-                    chunks = split_video(tmp_video.name, chunk_mins * 60, tmp_dir)
-                except RuntimeError as exc:
-                    last = [l for l in str(exc).splitlines() if l.strip()]
-                    yield _sse({"type": "error", "message": f"Error al dividir: {last[-1] if last else exc}"})
-                    return
-                n = len(chunks)
-                yield _sse({"type": "status", "message": f"Video dividido en {n} parte{'s' if n > 1 else ''}. Cargando modelo…"})
-            else:
-                chunks = [tmp_video.name]
-                yield _sse({"type": "status", "message": f"Video recibido ({video_mb} MB). Cargando modelo…"})
-
+            video_mb       = os.path.getsize(tmp_video.name) // 1024 // 1024
             total_duration = get_video_duration(tmp_video.name)
+
+            # ── Calcular rangos de tiempo ────────────────────────────
+            if chunk_mins > 0 and total_duration > 0:
+                chunk_secs = chunk_mins * 60
+                n_chunks   = math.ceil(total_duration / chunk_secs)
+                offsets    = [i * chunk_secs for i in range(n_chunks)]
+                yield _sse({"type": "status", "message": f"Video de {video_mb} MB ({fmt_ts(total_duration)}) → {n_chunks} partes de {chunk_mins} min"})
+            else:
+                chunk_secs = None
+                offsets    = [0.0]
+                n_chunks   = 1
+                yield _sse({"type": "status", "message": f"Video de {video_mb} MB ({fmt_ts(total_duration)}). Cargando modelo…"})
 
             yield _sse({"type": "status", "message": f"Cargando modelo '{model_name}'…"})
             model = get_model(model_name)
 
-            cumulative_offset = 0.0
-            first_chunk       = True
+            first_chunk = True
 
-            # ── Procesar cada parte ──────────────────────────────────
-            for idx, chunk_path in enumerate(chunks):
-                n_total = len(chunks)
-                part_label = f"parte {idx + 1} de {n_total}" if n_total > 1 else "video"
+            # ── Procesar cada rango de tiempo ────────────────────────
+            for idx, start_offset in enumerate(offsets):
+                part_label = f"parte {idx + 1} de {n_chunks}" if n_chunks > 1 else "video"
 
                 yield _sse({"type": "status", "message": f"Extrayendo audio de {part_label}…"})
+
                 tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                 tmp_audio.close()
                 audio_paths.append(tmp_audio.name)
 
                 try:
-                    extract_audio(chunk_path, tmp_audio.name)
+                    extract_audio_range(
+                        tmp_video.name, tmp_audio.name,
+                        start_sec=start_offset,
+                        duration_sec=chunk_secs,
+                    )
                 except RuntimeError as exc:
-                    last = [l for l in str(exc).splitlines() if l.strip()]
-                    yield _sse({"type": "error", "message": f"ffmpeg ({part_label}): {last[-1] if last else exc}"})
+                    lines = [l for l in str(exc).splitlines() if l.strip()]
+                    yield _sse({"type": "error", "message": f"ffmpeg ({part_label}): {lines[-1] if lines else exc}"})
                     return
 
                 if os.path.getsize(tmp_audio.name) < 1000:
@@ -269,23 +237,21 @@ def process_video():
                 yield _sse({"type": "status", "message": f"Transcribiendo {part_label}…"})
                 segments, info = transcribe_audio(model, tmp_audio.name, language)
 
-                chunk_dur = round(float(info.duration), 1)
-
                 if first_chunk:
                     yield _sse({
                         "type": "info",
                         "language": info.language,
                         "language_probability": round(float(info.language_probability), 2),
-                        "duration": total_duration or chunk_dur,
-                        "total_parts": n_total,
+                        "duration": total_duration or round(float(info.duration), 1),
+                        "total_parts": n_chunks,
                     })
                     first_chunk = False
-                elif n_total > 1:
-                    yield _sse({"type": "chunk", "part": idx + 1, "total": n_total})
+                elif n_chunks > 1:
+                    yield _sse({"type": "chunk", "part": idx + 1, "total": n_chunks})
 
                 for seg in segments:
-                    orig_start = seg.start + cumulative_offset
-                    orig_end   = seg.end   + cumulative_offset
+                    orig_start = seg.start + start_offset
+                    orig_end   = seg.end   + start_offset
                     screenshot = extract_frame(tmp_video.name, orig_start)
                     event = {
                         "type":      "segment",
@@ -298,7 +264,12 @@ def process_video():
                         event["screenshot"] = screenshot
                     yield _sse(event)
 
-                cumulative_offset += chunk_dur
+                # liberar audio de esta parte inmediatamente
+                try:
+                    os.unlink(tmp_audio.name)
+                    audio_paths.remove(tmp_audio.name)
+                except OSError:
+                    pass
 
             yield _sse({"type": "done"})
 
@@ -314,8 +285,6 @@ def process_video():
                     os.unlink(p)
                 except OSError:
                     pass
-            if tmp_dir:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
