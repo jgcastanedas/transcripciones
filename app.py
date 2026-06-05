@@ -50,6 +50,22 @@ def check_ffmpeg() -> bool:
         return False
 
 
+def has_audio_stream(video_path: str) -> bool:
+    """Devuelve True si el video tiene al menos una pista de audio."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-select_streams", "a:0",
+             "-show_entries", "stream=codec_type",
+             "-of", "default=noprint_wrappers=1:nokey=1",
+             video_path],
+            capture_output=True, timeout=30,
+        )
+        return result.returncode == 0 and result.stdout.strip() != b""
+    except Exception:
+        return True  # si ffprobe falla, intentar igual
+
+
 def get_video_duration(video_path: str) -> float:
     try:
         result = subprocess.run(
@@ -193,6 +209,10 @@ def process_video():
 
             video_mb       = os.path.getsize(tmp_video.name) // 1024 // 1024
             total_duration = get_video_duration(tmp_video.name)
+
+            if not has_audio_stream(tmp_video.name):
+                yield _sse({"type": "error", "message": "Este video no tiene pista de audio. Si es una grabación de pantalla, asegúrate de haber activado el micrófono al grabar."})
+                return
 
             # ── Determinar rango a procesar ──────────────────────────
             proc_start = max(0.0, start_sec)
