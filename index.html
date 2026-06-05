@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Transcriptor de audio · local</title>
+<title>Transcriptor · local</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -26,6 +26,39 @@
   .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 24px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    border-radius: 9px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--accent-2); color: #fff; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Shared ── */
   .card {
     background: var(--panel); border: 1px solid var(--border);
     border-radius: 14px; padding: 20px; margin-bottom: 18px;
@@ -36,224 +69,485 @@
     background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
     border-radius: 9px; padding: 9px 12px; font-size: 14px; min-width: 150px;
   }
-  #drop {
+  .drop-zone {
     border: 2px dashed var(--border); border-radius: 12px; padding: 26px;
     text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
     background: var(--panel-2);
   }
-  #drop.over { border-color: var(--accent); color: var(--text); background: #20283f; }
-  #drop strong { color: var(--text); }
-  #fileName { margin-top: 10px; font-size: 14px; color: var(--text); }
+  .drop-zone.over { border-color: var(--accent); color: var(--text); background: #20283f; }
+  .drop-zone strong { color: var(--text); }
+  .file-name { margin-top: 10px; font-size: 14px; color: var(--text); }
   .btn {
     background: var(--accent-2); color: #fff; border: 0; border-radius: 10px;
     padding: 11px 20px; font-size: 15px; font-weight: 600; cursor: pointer;
   }
   .btn:hover { background: var(--accent); }
   .btn:disabled { opacity: .5; cursor: not-allowed; }
-  .btn.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
-  .actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; flex-wrap: wrap; }
-  #status { font-size: 13px; color: var(--muted); min-height: 18px; }
-  #status.err { color: var(--err); }
-  #status.ok { color: var(--ok); }
-  .meta { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
-  #output {
-    margin-top: 4px; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 14px; padding: 8px 4px; min-height: 80px;
+  .btn.secondary {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); font-size: 14px; padding: 9px 16px;
   }
-  .seg { display: flex; gap: 12px; padding: 7px 14px; border-radius: 8px; }
-  .seg:hover { background: var(--panel-2); }
-  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; padding-top: 2px; white-space: nowrap; user-select: none; }
-  .seg .x { flex: 1; }
-  .empty { color: var(--muted); text-align: center; padding: 30px 10px; font-size: 14px; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; flex-wrap: wrap; }
+  .status-msg { font-size: 13px; color: var(--muted); min-height: 18px; }
+  .status-msg.err { color: var(--err); }
+  .status-msg.ok { color: var(--ok); }
+  .meta { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 8px; }
+  .toolbar h2 { font-size: 15px; margin: 0; }
+  .toolbar-btns { display: flex; gap: 8px; }
   .spinner {
     width: 15px; height: 15px; border: 2px solid var(--border);
     border-top-color: var(--accent); border-radius: 50%;
     display: inline-block; animation: spin 0.8s linear infinite; vertical-align: -2px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 8px; }
-  .toolbar h2 { font-size: 15px; margin: 0; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 10px; font-size: 14px; }
+
+  /* ── Audio output ── */
+  .output-box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 8px 4px; min-height: 80px;
+  }
+  .seg { display: flex; gap: 12px; padding: 7px 14px; border-radius: 8px; }
+  .seg:hover { background: var(--panel-2); }
+  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; padding-top: 2px; white-space: nowrap; user-select: none; }
+  .seg .x { flex: 1; }
+
+  /* ── Video output ── */
+  .v-output-box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 8px; min-height: 80px;
+  }
+  .seg-v {
+    display: flex;
+    gap: 14px;
+    padding: 12px 10px;
+    border-radius: 10px;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--border);
+  }
+  .seg-v:last-child { border-bottom: 0; }
+  .seg-v:hover { background: var(--panel-2); }
+  .seg-v .thumb {
+    width: 150px;
+    min-width: 150px;
+    border-radius: 8px;
+    cursor: zoom-in;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    transition: border-color .15s, transform .15s;
+    flex-shrink: 0;
+  }
+  .seg-v .thumb:hover { border-color: var(--accent); transform: scale(1.02); }
+  .seg-v .thumb img { width: 100%; display: block; border-radius: 7px; }
+  .seg-v .thumb-empty {
+    width: 150px;
+    min-width: 150px;
+    height: 84px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px dashed var(--border);
+    flex-shrink: 0;
+  }
+  .seg-v .seg-body { flex: 1; padding-top: 2px; }
+  .seg-v .t { color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; margin-bottom: 6px; }
+  .seg-v .x { font-size: 14px; line-height: 1.55; }
+
+  /* ── Lightbox ── */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.88);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+  }
+  .lightbox.open { display: flex; }
+  .lightbox img {
+    max-width: 92vw;
+    max-height: 92vh;
+    border-radius: 10px;
+    box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Transcriptor de audio</h1>
-  <p class="sub">Corre 100% en tu equipo. El audio no sale de tu Mac.</p>
+  <h1>Transcriptor</h1>
+  <p class="sub">Corre 100% en tu equipo. Los archivos no salen de tu Mac.</p>
 
-  <div class="card">
-    <div id="drop">
-      <div>Arrastra un audio aquí, o <strong>haz clic para elegir</strong></div>
-      <div class="hint">.m4a · .mp3 · .wav · .mp4 · .ogg …</div>
-      <div id="fileName"></div>
-    </div>
-    <input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.mp4" hidden>
-
-    <div class="row" style="margin-top:18px;">
-      <div>
-        <label for="model">Modelo (precisión vs. velocidad)</label>
-        <select id="model">
-          <option value="tiny">tiny — más rápido</option>
-          <option value="base">base</option>
-          <option value="small">small</option>
-          <option value="medium" selected>medium — recomendado</option>
-          <option value="large-v3">large-v3 — máxima precisión</option>
-        </select>
-      </div>
-      <div>
-        <label for="language">Idioma</label>
-        <select id="language">
-          <option value="es" selected>Español</option>
-          <option value="auto">Detectar automáticamente</option>
-          <option value="en">Inglés</option>
-          <option value="pt">Portugués</option>
-          <option value="fr">Francés</option>
-          <option value="it">Italiano</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="actions">
-      <button class="btn" id="go" disabled>Transcribir</button>
-      <span id="status"></span>
-    </div>
-    <p class="hint">La primera vez con cada modelo se descarga una sola vez (medium ≈ 1.5 GB). Luego es rápido.</p>
+  <!-- Tab bar -->
+  <div class="tabs">
+    <button class="tab active" data-tab="audio">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+      Audio
+    </button>
+    <button class="tab" data-tab="video">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect width="15" height="14" x="1" y="5" rx="2" ry="2"/></svg>
+      Video
+    </button>
   </div>
 
-  <div class="toolbar">
-    <h2>Transcripción</h2>
-    <div>
-      <button class="btn secondary" id="copy" disabled>Copiar</button>
-      <button class="btn secondary" id="download" disabled>Descargar .txt</button>
+  <!-- ════════════════ AUDIO PANEL ════════════════ -->
+  <div id="panel-audio" class="panel active">
+    <div class="card">
+      <div class="drop-zone" id="a-drop">
+        <div>Arrastra un audio aquí, o <strong>haz clic para elegir</strong></div>
+        <div class="hint">.m4a · .mp3 · .wav · .ogg …</div>
+        <div class="file-name" id="a-fileName"></div>
+      </div>
+      <input type="file" id="a-file" accept="audio/*,.m4a,.mp3,.wav,.ogg" hidden>
+
+      <div class="row" style="margin-top:18px;">
+        <div>
+          <label for="a-model">Modelo (precisión vs. velocidad)</label>
+          <select id="a-model">
+            <option value="tiny">tiny — más rápido</option>
+            <option value="base">base</option>
+            <option value="small">small</option>
+            <option value="medium" selected>medium — recomendado</option>
+            <option value="large-v3">large-v3 — máxima precisión</option>
+          </select>
+        </div>
+        <div>
+          <label for="a-language">Idioma</label>
+          <select id="a-language">
+            <option value="es" selected>Español</option>
+            <option value="auto">Detectar automáticamente</option>
+            <option value="en">Inglés</option>
+            <option value="pt">Portugués</option>
+            <option value="fr">Francés</option>
+            <option value="it">Italiano</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="a-go" disabled>Transcribir</button>
+        <span class="status-msg" id="a-status"></span>
+      </div>
+      <p class="hint">La primera vez con cada modelo se descarga una sola vez (medium ≈ 1.5 GB). Luego es rápido.</p>
     </div>
+
+    <div class="toolbar">
+      <h2>Transcripción</h2>
+      <div class="toolbar-btns">
+        <button class="btn secondary" id="a-copy" disabled>Copiar</button>
+        <button class="btn secondary" id="a-download" disabled>Descargar .txt</button>
+      </div>
+    </div>
+    <p class="meta" id="a-meta"></p>
+    <div class="output-box" id="a-output"><div class="empty">Aquí aparecerá la transcripción…</div></div>
   </div>
-  <p class="meta" id="meta"></p>
-  <div id="output"><div class="empty">Aquí aparecerá la transcripción…</div></div>
+
+  <!-- ════════════════ VIDEO PANEL ════════════════ -->
+  <div id="panel-video" class="panel">
+    <div class="card">
+      <div class="drop-zone" id="v-drop">
+        <div>Arrastra un video aquí, o <strong>haz clic para elegir</strong></div>
+        <div class="hint">.mp4 · .mov · .mkv · .webm · .avi …</div>
+        <div class="file-name" id="v-fileName"></div>
+      </div>
+      <input type="file" id="v-file" accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v" hidden>
+
+      <div class="row" style="margin-top:18px;">
+        <div>
+          <label for="v-model">Modelo (precisión vs. velocidad)</label>
+          <select id="v-model">
+            <option value="tiny">tiny — más rápido</option>
+            <option value="base">base</option>
+            <option value="small">small</option>
+            <option value="medium" selected>medium — recomendado</option>
+            <option value="large-v3">large-v3 — máxima precisión</option>
+          </select>
+        </div>
+        <div>
+          <label for="v-language">Idioma</label>
+          <select id="v-language">
+            <option value="es" selected>Español</option>
+            <option value="auto">Detectar automáticamente</option>
+            <option value="en">Inglés</option>
+            <option value="pt">Portugués</option>
+            <option value="fr">Francés</option>
+            <option value="it">Italiano</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="v-go" disabled>Procesar video</button>
+        <span class="status-msg" id="v-status"></span>
+      </div>
+      <p class="hint">Requiere <strong>ffmpeg</strong> instalado (<code>brew install ffmpeg</code>). El video no sale de tu Mac.</p>
+    </div>
+
+    <div class="toolbar">
+      <h2>Transcripción + pantallazos</h2>
+      <div class="toolbar-btns">
+        <button class="btn secondary" id="v-copy" disabled>Copiar texto</button>
+        <button class="btn secondary" id="v-download" disabled>Descargar .txt</button>
+      </div>
+    </div>
+    <p class="meta" id="v-meta"></p>
+    <div class="v-output-box" id="v-output"><div class="empty">Aquí aparecerán la transcripción y los pantallazos…</div></div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <img id="lightbox-img" src="" alt="pantallazo ampliado">
 </div>
 
 <script>
-const dropEl = document.getElementById('drop');
-const fileInput = document.getElementById('file');
-const fileNameEl = document.getElementById('fileName');
-const goBtn = document.getElementById('go');
-const statusEl = document.getElementById('status');
-const outputEl = document.getElementById('output');
-const metaEl = document.getElementById('meta');
-const copyBtn = document.getElementById('copy');
-const downloadBtn = document.getElementById('download');
-
-let selectedFile = null;
-let segments = [];
-
-function setStatus(msg, cls) {
-  statusEl.className = cls || '';
-  statusEl.innerHTML = msg;
-}
-
-dropEl.addEventListener('click', () => fileInput.click());
-dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('over'); });
-dropEl.addEventListener('dragleave', () => dropEl.classList.remove('over'));
-dropEl.addEventListener('drop', e => {
-  e.preventDefault(); dropEl.classList.remove('over');
-  if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]);
+// ─── Tabs ────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  });
 });
-fileInput.addEventListener('change', () => { if (fileInput.files.length) pickFile(fileInput.files[0]); });
 
-function pickFile(f) {
-  selectedFile = f;
-  fileNameEl.textContent = '📄 ' + f.name + '  (' + (f.size / 1048576).toFixed(1) + ' MB)';
-  goBtn.disabled = false;
-  setStatus('');
+// ─── Lightbox ────────────────────────────────────────────────────────
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+lightbox.addEventListener('click', () => lightbox.classList.remove('open'));
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.classList.add('open');
 }
 
-goBtn.addEventListener('click', transcribe);
+// ─── Helpers ─────────────────────────────────────────────────────────
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}m ${sec}s`;
+}
+function spin() { return '<span class="spinner"></span> '; }
 
-async function transcribe() {
-  if (!selectedFile) return;
-  segments = [];
-  outputEl.innerHTML = '';
-  metaEl.textContent = '';
-  copyBtn.disabled = true;
-  downloadBtn.disabled = true;
-  goBtn.disabled = true;
-  setStatus('<span class="spinner"></span> Iniciando…');
+// ─── AUDIO TAB ───────────────────────────────────────────────────────
+const aDrop   = document.getElementById('a-drop');
+const aFileIn = document.getElementById('a-file');
+const aFileEl = document.getElementById('a-fileName');
+const aGo     = document.getElementById('a-go');
+const aSt     = document.getElementById('a-status');
+const aOut    = document.getElementById('a-output');
+const aMeta   = document.getElementById('a-meta');
+const aCopy   = document.getElementById('a-copy');
+const aDl     = document.getElementById('a-download');
+
+let aFile = null, aSegs = [];
+
+function aStatus(msg, cls) { aSt.className = 'status-msg ' + (cls || ''); aSt.innerHTML = msg; }
+
+aDrop.addEventListener('click', () => aFileIn.click());
+aDrop.addEventListener('dragover', e => { e.preventDefault(); aDrop.classList.add('over'); });
+aDrop.addEventListener('dragleave', () => aDrop.classList.remove('over'));
+aDrop.addEventListener('drop', e => {
+  e.preventDefault(); aDrop.classList.remove('over');
+  if (e.dataTransfer.files[0]) aPickFile(e.dataTransfer.files[0]);
+});
+aFileIn.addEventListener('change', () => { if (aFileIn.files[0]) aPickFile(aFileIn.files[0]); });
+
+function aPickFile(f) {
+  aFile = f;
+  aFileEl.textContent = '📄 ' + f.name + '  (' + (f.size / 1048576).toFixed(1) + ' MB)';
+  aGo.disabled = false;
+  aStatus('');
+}
+
+aGo.addEventListener('click', async () => {
+  if (!aFile) return;
+  aSegs = []; aOut.innerHTML = ''; aMeta.textContent = '';
+  aCopy.disabled = true; aDl.disabled = true; aGo.disabled = true;
+  aStatus(spin() + 'Iniciando…');
 
   const fd = new FormData();
-  fd.append('audio', selectedFile);
-  fd.append('model', document.getElementById('model').value);
-  fd.append('language', document.getElementById('language').value);
+  fd.append('audio', aFile);
+  fd.append('model', document.getElementById('a-model').value);
+  fd.append('language', document.getElementById('a-language').value);
 
   try {
     const resp = await fetch('/transcribe', { method: 'POST', body: fd });
     if (!resp.ok) throw new Error('Error del servidor (' + resp.status + ')');
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (line) handleEvent(JSON.parse(line));
+    await readStream(resp, ev => {
+      if (ev.type === 'status') {
+        aStatus(spin() + ev.message);
+      } else if (ev.type === 'info') {
+        aMeta.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability * 100)}%) · Duración: ${fmtDur(ev.duration)}`;
+        aStatus(spin() + 'Transcribiendo…');
+      } else if (ev.type === 'segment') {
+        aSegs.push(ev);
+        const div = document.createElement('div');
+        div.className = 'seg';
+        const ts = document.createElement('span'); ts.className = 't'; ts.textContent = ev.start;
+        const tx = document.createElement('span'); tx.className = 'x'; tx.textContent = ev.text;
+        div.append(ts, tx);
+        aOut.appendChild(div);
+        div.scrollIntoView({ block: 'nearest' });
+        aCopy.disabled = false; aDl.disabled = false;
+      } else if (ev.type === 'done') {
+        aStatus('✓ Transcripción completa (' + aSegs.length + ' segmentos)', 'ok');
+      } else if (ev.type === 'error') {
+        aStatus('⚠️ ' + ev.message, 'err');
       }
-    }
+    });
   } catch (err) {
-    setStatus('⚠️ ' + err.message, 'err');
+    aStatus('⚠️ ' + err.message, 'err');
   } finally {
-    goBtn.disabled = false;
+    aGo.disabled = false;
   }
-}
-
-function handleEvent(ev) {
-  if (ev.type === 'status') {
-    setStatus('<span class="spinner"></span> ' + ev.message);
-  } else if (ev.type === 'info') {
-    metaEl.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability*100)}%) · Duración: ${formatDur(ev.duration)}`;
-    setStatus('<span class="spinner"></span> Transcribiendo…');
-  } else if (ev.type === 'segment') {
-    segments.push(ev);
-    const div = document.createElement('div');
-    div.className = 'seg';
-    div.innerHTML = `<span class="t">${ev.start}</span><span class="x"></span>`;
-    div.querySelector('.x').textContent = ev.text;
-    outputEl.appendChild(div);
-    div.scrollIntoView({ block: 'nearest' });
-    copyBtn.disabled = false;
-    downloadBtn.disabled = false;
-  } else if (ev.type === 'done') {
-    setStatus('✓ Transcripción completa (' + segments.length + ' segmentos)', 'ok');
-  } else if (ev.type === 'error') {
-    setStatus('⚠️ ' + ev.message, 'err');
-  }
-}
-
-function formatDur(s) {
-  const m = Math.floor(s / 60), sec = Math.round(s % 60);
-  return `${m}m ${sec}s`;
-}
-
-function plainText() {
-  return segments.map(s => `[${s.start}] ${s.text}`).join('\n');
-}
-
-copyBtn.addEventListener('click', async () => {
-  await navigator.clipboard.writeText(plainText());
-  copyBtn.textContent = '¡Copiado!';
-  setTimeout(() => copyBtn.textContent = 'Copiar', 1500);
 });
 
-downloadBtn.addEventListener('click', () => {
-  const blob = new Blob([plainText()], { type: 'text/plain;charset=utf-8' });
+function aText() { return aSegs.map(s => `[${s.start}] ${s.text}`).join('\n'); }
+
+aCopy.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(aText());
+  aCopy.textContent = '¡Copiado!';
+  setTimeout(() => aCopy.textContent = 'Copiar', 1500);
+});
+aDl.addEventListener('click', () => {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = (selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : 'transcripcion') + '.txt';
+  a.href = URL.createObjectURL(new Blob([aText()], { type: 'text/plain;charset=utf-8' }));
+  a.download = (aFile ? aFile.name.replace(/\.[^.]+$/, '') : 'transcripcion') + '.txt';
   a.click();
 });
+
+// ─── VIDEO TAB ───────────────────────────────────────────────────────
+const vDrop   = document.getElementById('v-drop');
+const vFileIn = document.getElementById('v-file');
+const vFileEl = document.getElementById('v-fileName');
+const vGo     = document.getElementById('v-go');
+const vSt     = document.getElementById('v-status');
+const vOut    = document.getElementById('v-output');
+const vMeta   = document.getElementById('v-meta');
+const vCopy   = document.getElementById('v-copy');
+const vDl     = document.getElementById('v-download');
+
+let vFile = null, vSegs = [];
+
+function vStatus(msg, cls) { vSt.className = 'status-msg ' + (cls || ''); vSt.innerHTML = msg; }
+
+vDrop.addEventListener('click', () => vFileIn.click());
+vDrop.addEventListener('dragover', e => { e.preventDefault(); vDrop.classList.add('over'); });
+vDrop.addEventListener('dragleave', () => vDrop.classList.remove('over'));
+vDrop.addEventListener('drop', e => {
+  e.preventDefault(); vDrop.classList.remove('over');
+  if (e.dataTransfer.files[0]) vPickFile(e.dataTransfer.files[0]);
+});
+vFileIn.addEventListener('change', () => { if (vFileIn.files[0]) vPickFile(vFileIn.files[0]); });
+
+function vPickFile(f) {
+  vFile = f;
+  vFileEl.textContent = '🎬 ' + f.name + '  (' + (f.size / 1048576).toFixed(1) + ' MB)';
+  vGo.disabled = false;
+  vStatus('');
+}
+
+vGo.addEventListener('click', async () => {
+  if (!vFile) return;
+  vSegs = []; vOut.innerHTML = ''; vMeta.textContent = '';
+  vCopy.disabled = true; vDl.disabled = true; vGo.disabled = true;
+  vStatus(spin() + 'Iniciando…');
+
+  const fd = new FormData();
+  fd.append('video', vFile);
+  fd.append('model', document.getElementById('v-model').value);
+  fd.append('language', document.getElementById('v-language').value);
+
+  try {
+    const resp = await fetch('/process-video', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error('Error del servidor (' + resp.status + ')');
+    await readStream(resp, ev => {
+      if (ev.type === 'status') {
+        vStatus(spin() + ev.message);
+      } else if (ev.type === 'info') {
+        vMeta.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability * 100)}%) · Duración: ${fmtDur(ev.duration)}`;
+        vStatus(spin() + 'Procesando…');
+      } else if (ev.type === 'segment') {
+        vSegs.push(ev);
+
+        const row = document.createElement('div');
+        row.className = 'seg-v';
+
+        if (ev.screenshot) {
+          const thumb = document.createElement('div');
+          thumb.className = 'thumb';
+          const img = document.createElement('img');
+          img.src = ev.screenshot;
+          img.loading = 'lazy';
+          img.alt = 'fotograma ' + ev.start;
+          thumb.appendChild(img);
+          const shot = ev.screenshot;
+          thumb.addEventListener('click', () => openLightbox(shot));
+          row.appendChild(thumb);
+        } else {
+          const empty = document.createElement('div');
+          empty.className = 'thumb-empty';
+          row.appendChild(empty);
+        }
+
+        const body = document.createElement('div');
+        body.className = 'seg-body';
+        const ts = document.createElement('div');
+        ts.className = 't';
+        ts.textContent = ev.start + ' → ' + ev.end;
+        const tx = document.createElement('div');
+        tx.className = 'x';
+        tx.textContent = ev.text;
+        body.append(ts, tx);
+        row.appendChild(body);
+
+        vOut.appendChild(row);
+        row.scrollIntoView({ block: 'nearest' });
+        vCopy.disabled = false; vDl.disabled = false;
+      } else if (ev.type === 'done') {
+        vStatus('✓ Proceso completo (' + vSegs.length + ' segmentos)', 'ok');
+      } else if (ev.type === 'error') {
+        vStatus('⚠️ ' + ev.message, 'err');
+      }
+    });
+  } catch (err) {
+    vStatus('⚠️ ' + err.message, 'err');
+  } finally {
+    vGo.disabled = false;
+  }
+});
+
+function vText() { return vSegs.map(s => `[${s.start}] ${s.text}`).join('\n'); }
+
+vCopy.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(vText());
+  vCopy.textContent = '¡Copiado!';
+  setTimeout(() => vCopy.textContent = 'Copiar texto', 1500);
+});
+vDl.addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([vText()], { type: 'text/plain;charset=utf-8' }));
+  a.download = (vFile ? vFile.name.replace(/\.[^.]+$/, '') : 'transcripcion') + '.txt';
+  a.click();
+});
+
+// ─── Shared stream reader ─────────────────────────────────────────────
+async function readStream(resp, onEvent) {
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) onEvent(JSON.parse(line));
+    }
+  }
+}
 </script>
 </body>
 </html>
