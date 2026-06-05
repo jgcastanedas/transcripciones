@@ -154,6 +154,25 @@
   .seg-v .t { color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; user-select: none; margin-bottom: 6px; }
   .seg-v .x { font-size: 14px; line-height: 1.55; }
 
+  /* ── Divisor de partes ── */
+  .chunk-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .chunk-divider::before, .chunk-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
   /* ── Lightbox ── */
   .lightbox {
     display: none;
@@ -273,6 +292,15 @@
             <option value="pt">Portugués</option>
             <option value="fr">Francés</option>
             <option value="it">Italiano</option>
+          </select>
+        </div>
+        <div>
+          <label for="v-chunk">Partir en trozos</label>
+          <select id="v-chunk">
+            <option value="0">Sin partir</option>
+            <option value="10">10 min por trozo</option>
+            <option value="20" selected>20 min por trozo</option>
+            <option value="30">30 min por trozo</option>
           </select>
         </div>
       </div>
@@ -457,6 +485,7 @@ vGo.addEventListener('click', async () => {
   fd.append('video', vFile);
   fd.append('model', document.getElementById('v-model').value);
   fd.append('language', document.getElementById('v-language').value);
+  fd.append('chunk_minutes', document.getElementById('v-chunk').value);
 
   try {
     const resp = await fetch('/process-video', { method: 'POST', body: fd });
@@ -465,8 +494,14 @@ vGo.addEventListener('click', async () => {
       if (ev.type === 'status') {
         vStatus(spin() + ev.message);
       } else if (ev.type === 'info') {
-        vMeta.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability * 100)}%) · Duración: ${fmtDur(ev.duration)}`;
+        const partsLabel = ev.total_parts > 1 ? ` · ${ev.total_parts} partes` : '';
+        vMeta.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability * 100)}%) · Duración: ${fmtDur(ev.duration)}${partsLabel}`;
         vStatus(spin() + 'Procesando…');
+      } else if (ev.type === 'chunk') {
+        const div = document.createElement('div');
+        div.className = 'chunk-divider';
+        div.textContent = `Parte ${ev.part} de ${ev.total}`;
+        vOut.appendChild(div);
       } else if (ev.type === 'segment') {
         vSegs.push(ev);
 

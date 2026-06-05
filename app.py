@@ -7,6 +7,7 @@ Levanta una web en http://127.0.0.1:5005. Todo el procesamiento es LOCAL.
 import base64
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -15,6 +16,7 @@ import webbrowser
 from flask import Flask, request, Response, send_from_directory, stream_with_context
 
 app = Flask(__name__, static_folder=None)
+app.config["MAX_CONTENT_LENGTH"] = None  # sin límite de tamaño de upload
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,11 +51,50 @@ def check_ffmpeg() -> bool:
 
 
 def extract_audio(video_path: str, audio_path: str) -> None:
-    subprocess.run(
+    result = subprocess.run(
         ["ffmpeg", "-y", "-i", video_path,
          "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path],
-        capture_output=True, check=True, timeout=300,
+        capture_output=True, timeout=600,
     )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+
+
+def split_video(video_path: str, chunk_seconds: int, out_dir: str):
+    """Divide el video en partes de chunk_seconds sin recodificar. Devuelve lista ordenada de paths."""
+    ext = os.path.splitext(video_path)[1] or ".mp4"
+    pattern = os.path.join(out_dir, f"chunk_%03d{ext}")
+    result = subprocess.run(
+        ["ffmpeg", "-i", video_path,
+         "-c", "copy",
+         "-f", "segment",
+         "-segment_time", str(chunk_seconds),
+         "-reset_timestamps", "1",
+         pattern],
+        capture_output=True, timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    return sorted(
+        os.path.join(out_dir, f)
+        for f in os.listdir(out_dir)
+        if f.startswith("chunk_")
+    )
+
+
+def get_video_duration(video_path: str) -> float:
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet",
+             "-show_entries", "format=duration",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.decode().strip())
+    except Exception:
+        pass
+    return 0.0
 
 
 def extract_frame(video_path: str, timestamp: float):
@@ -71,6 +112,21 @@ def extract_frame(video_path: str, timestamp: float):
         return None
     except Exception:
         return None
+
+
+def transcribe_audio(model, audio_path: str, language):
+    """Transcribe con VAD; si falla, reintenta sin VAD."""
+    try:
+        segments, info = model.transcribe(
+            audio_path,
+            language=language,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
+        )
+        return segments, info
+    except Exception:
+        segments, info = model.transcribe(audio_path, language=language)
+        return segments, info
 
 
 @app.route("/")
@@ -100,12 +156,7 @@ def transcribe():
             model = get_model(model_name)
 
             yield _sse({"type": "status", "message": "Analizando el audio…"})
-            segments, info = model.transcribe(
-                tmp.name,
-                language=language,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
-            )
+            segments, info = transcribe_audio(model, tmp.name, language)
             yield _sse({
                 "type": "info",
                 "language": info.language,
@@ -140,8 +191,9 @@ def process_video():
         return {"error": "No se recibió ningún archivo de video."}, 400
 
     f = request.files["video"]
-    model_name = request.form.get("model", "medium")
-    language = request.form.get("language", "es").strip() or None
+    model_name  = request.form.get("model", "medium")
+    language    = request.form.get("language", "es").strip() or None
+    chunk_mins  = int(request.form.get("chunk_minutes", "0") or "0")
     if language == "auto":
         language = None
 
@@ -150,61 +202,111 @@ def process_video():
     f.save(tmp_video.name)
     tmp_video.close()
 
-    tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    tmp_audio.close()
-
     def generate():
+        tmp_dir     = None
+        audio_paths = []
         try:
             if not check_ffmpeg():
                 yield _sse({"type": "error", "message": "ffmpeg no encontrado. Instálalo con: brew install ffmpeg"})
                 return
 
-            yield _sse({"type": "status", "message": "Extrayendo audio del video…"})
-            try:
-                extract_audio(tmp_video.name, tmp_audio.name)
-            except subprocess.CalledProcessError:
-                yield _sse({"type": "error", "message": "Error al extraer el audio. ¿El video tiene pista de audio?"})
-                return
+            video_mb = os.path.getsize(tmp_video.name) // 1024 // 1024
+
+            # ── Dividir en partes si se pidió ────────────────────────
+            if chunk_mins > 0:
+                yield _sse({"type": "status", "message": f"Dividiendo video de {video_mb} MB en partes de {chunk_mins} min…"})
+                tmp_dir = tempfile.mkdtemp()
+                try:
+                    chunks = split_video(tmp_video.name, chunk_mins * 60, tmp_dir)
+                except RuntimeError as exc:
+                    last = [l for l in str(exc).splitlines() if l.strip()]
+                    yield _sse({"type": "error", "message": f"Error al dividir: {last[-1] if last else exc}"})
+                    return
+                n = len(chunks)
+                yield _sse({"type": "status", "message": f"Video dividido en {n} parte{'s' if n > 1 else ''}. Cargando modelo…"})
+            else:
+                chunks = [tmp_video.name]
+                yield _sse({"type": "status", "message": f"Video recibido ({video_mb} MB). Cargando modelo…"})
+
+            total_duration = get_video_duration(tmp_video.name)
 
             yield _sse({"type": "status", "message": f"Cargando modelo '{model_name}'…"})
             model = get_model(model_name)
 
-            yield _sse({"type": "status", "message": "Analizando el audio…"})
-            segments, info = model.transcribe(
-                tmp_audio.name,
-                language=language,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
-            )
-            yield _sse({
-                "type": "info",
-                "language": info.language,
-                "language_probability": round(float(info.language_probability), 2),
-                "duration": round(float(info.duration), 1),
-            })
+            cumulative_offset = 0.0
+            first_chunk       = True
 
-            for seg in segments:
-                screenshot = extract_frame(tmp_video.name, seg.start)
-                event = {
-                    "type": "segment",
-                    "start": fmt_ts(seg.start),
-                    "end": fmt_ts(seg.end),
-                    "start_sec": round(float(seg.start), 2),
-                    "text": seg.text.strip(),
-                }
-                if screenshot:
-                    event["screenshot"] = screenshot
-                yield _sse(event)
+            # ── Procesar cada parte ──────────────────────────────────
+            for idx, chunk_path in enumerate(chunks):
+                n_total = len(chunks)
+                part_label = f"parte {idx + 1} de {n_total}" if n_total > 1 else "video"
+
+                yield _sse({"type": "status", "message": f"Extrayendo audio de {part_label}…"})
+                tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                tmp_audio.close()
+                audio_paths.append(tmp_audio.name)
+
+                try:
+                    extract_audio(chunk_path, tmp_audio.name)
+                except RuntimeError as exc:
+                    last = [l for l in str(exc).splitlines() if l.strip()]
+                    yield _sse({"type": "error", "message": f"ffmpeg ({part_label}): {last[-1] if last else exc}"})
+                    return
+
+                if os.path.getsize(tmp_audio.name) < 1000:
+                    yield _sse({"type": "error", "message": f"Audio vacío en {part_label}. ¿El video tiene pista de audio?"})
+                    return
+
+                yield _sse({"type": "status", "message": f"Transcribiendo {part_label}…"})
+                segments, info = transcribe_audio(model, tmp_audio.name, language)
+
+                chunk_dur = round(float(info.duration), 1)
+
+                if first_chunk:
+                    yield _sse({
+                        "type": "info",
+                        "language": info.language,
+                        "language_probability": round(float(info.language_probability), 2),
+                        "duration": total_duration or chunk_dur,
+                        "total_parts": n_total,
+                    })
+                    first_chunk = False
+                elif n_total > 1:
+                    yield _sse({"type": "chunk", "part": idx + 1, "total": n_total})
+
+                for seg in segments:
+                    orig_start = seg.start + cumulative_offset
+                    orig_end   = seg.end   + cumulative_offset
+                    screenshot = extract_frame(tmp_video.name, orig_start)
+                    event = {
+                        "type":      "segment",
+                        "start":     fmt_ts(orig_start),
+                        "end":       fmt_ts(orig_end),
+                        "start_sec": round(orig_start, 2),
+                        "text":      seg.text.strip(),
+                    }
+                    if screenshot:
+                        event["screenshot"] = screenshot
+                    yield _sse(event)
+
+                cumulative_offset += chunk_dur
 
             yield _sse({"type": "done"})
+
         except Exception as exc:
             yield _sse({"type": "error", "message": str(exc)})
         finally:
-            for path in [tmp_video.name, tmp_audio.name]:
+            try:
+                os.unlink(tmp_video.name)
+            except OSError:
+                pass
+            for p in audio_paths:
                 try:
-                    os.unlink(path)
+                    os.unlink(p)
                 except OSError:
                     pass
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
