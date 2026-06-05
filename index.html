@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transcriptor de audio · local</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --accent: #6c8cff;
+    --accent-2: #4a6bff;
+    --ok: #46c98b;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px; margin-bottom: 18px;
+  }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 12px; font-size: 14px; min-width: 150px;
+  }
+  #drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 26px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
+    background: var(--panel-2);
+  }
+  #drop.over { border-color: var(--accent); color: var(--text); background: #20283f; }
+  #drop strong { color: var(--text); }
+  #fileName { margin-top: 10px; font-size: 14px; color: var(--text); }
+  .btn {
+    background: var(--accent-2); color: #fff; border: 0; border-radius: 10px;
+    padding: 11px 20px; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+  .btn:hover { background: var(--accent); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+  .actions { display: flex; gap: 10px; margin-top: 16px; align-items: center; flex-wrap: wrap; }
+  #status { font-size: 13px; color: var(--muted); min-height: 18px; }
+  #status.err { color: var(--err); }
+  #status.ok { color: var(--ok); }
+  .meta { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  #output {
+    margin-top: 4px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 8px 4px; min-height: 80px;
+  }
+  .seg { display: flex; gap: 12px; padding: 7px 14px; border-radius: 8px; }
+  .seg:hover { background: var(--panel-2); }
+  .seg .t { color: var(--accent); font-variant-numeric: tabular-nums; font-size: 12px; padding-top: 2px; white-space: nowrap; user-select: none; }
+  .seg .x { flex: 1; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 10px; font-size: 14px; }
+  .spinner {
+    width: 15px; height: 15px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    display: inline-block; animation: spin 0.8s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin: 22px 0 8px; }
+  .toolbar h2 { font-size: 15px; margin: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Transcriptor de audio</h1>
+  <p class="sub">Corre 100% en tu equipo. El audio no sale de tu Mac.</p>
+
+  <div class="card">
+    <div id="drop">
+      <div>Arrastra un audio aquí, o <strong>haz clic para elegir</strong></div>
+      <div class="hint">.m4a · .mp3 · .wav · .mp4 · .ogg …</div>
+      <div id="fileName"></div>
+    </div>
+    <input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.ogg,.mp4" hidden>
+
+    <div class="row" style="margin-top:18px;">
+      <div>
+        <label for="model">Modelo (precisión vs. velocidad)</label>
+        <select id="model">
+          <option value="tiny">tiny — más rápido</option>
+          <option value="base">base</option>
+          <option value="small">small</option>
+          <option value="medium" selected>medium — recomendado</option>
+          <option value="large-v3">large-v3 — máxima precisión</option>
+        </select>
+      </div>
+      <div>
+        <label for="language">Idioma</label>
+        <select id="language">
+          <option value="es" selected>Español</option>
+          <option value="auto">Detectar automáticamente</option>
+          <option value="en">Inglés</option>
+          <option value="pt">Portugués</option>
+          <option value="fr">Francés</option>
+          <option value="it">Italiano</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="go" disabled>Transcribir</button>
+      <span id="status"></span>
+    </div>
+    <p class="hint">La primera vez con cada modelo se descarga una sola vez (medium ≈ 1.5 GB). Luego es rápido.</p>
+  </div>
+
+  <div class="toolbar">
+    <h2>Transcripción</h2>
+    <div>
+      <button class="btn secondary" id="copy" disabled>Copiar</button>
+      <button class="btn secondary" id="download" disabled>Descargar .txt</button>
+    </div>
+  </div>
+  <p class="meta" id="meta"></p>
+  <div id="output"><div class="empty">Aquí aparecerá la transcripción…</div></div>
+</div>
+
+<script>
+const dropEl = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+const fileNameEl = document.getElementById('fileName');
+const goBtn = document.getElementById('go');
+const statusEl = document.getElementById('status');
+const outputEl = document.getElementById('output');
+const metaEl = document.getElementById('meta');
+const copyBtn = document.getElementById('copy');
+const downloadBtn = document.getElementById('download');
+
+let selectedFile = null;
+let segments = [];
+
+function setStatus(msg, cls) {
+  statusEl.className = cls || '';
+  statusEl.innerHTML = msg;
+}
+
+dropEl.addEventListener('click', () => fileInput.click());
+dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('over'); });
+dropEl.addEventListener('dragleave', () => dropEl.classList.remove('over'));
+dropEl.addEventListener('drop', e => {
+  e.preventDefault(); dropEl.classList.remove('over');
+  if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) pickFile(fileInput.files[0]); });
+
+function pickFile(f) {
+  selectedFile = f;
+  fileNameEl.textContent = '📄 ' + f.name + '  (' + (f.size / 1048576).toFixed(1) + ' MB)';
+  goBtn.disabled = false;
+  setStatus('');
+}
+
+goBtn.addEventListener('click', transcribe);
+
+async function transcribe() {
+  if (!selectedFile) return;
+  segments = [];
+  outputEl.innerHTML = '';
+  metaEl.textContent = '';
+  copyBtn.disabled = true;
+  downloadBtn.disabled = true;
+  goBtn.disabled = true;
+  setStatus('<span class="spinner"></span> Iniciando…');
+
+  const fd = new FormData();
+  fd.append('audio', selectedFile);
+  fd.append('model', document.getElementById('model').value);
+  fd.append('language', document.getElementById('language').value);
+
+  try {
+    const resp = await fetch('/transcribe', { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error('Error del servidor (' + resp.status + ')');
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) handleEvent(JSON.parse(line));
+      }
+    }
+  } catch (err) {
+    setStatus('⚠️ ' + err.message, 'err');
+  } finally {
+    goBtn.disabled = false;
+  }
+}
+
+function handleEvent(ev) {
+  if (ev.type === 'status') {
+    setStatus('<span class="spinner"></span> ' + ev.message);
+  } else if (ev.type === 'info') {
+    metaEl.textContent = `Idioma: ${ev.language} (${Math.round(ev.language_probability*100)}%) · Duración: ${formatDur(ev.duration)}`;
+    setStatus('<span class="spinner"></span> Transcribiendo…');
+  } else if (ev.type === 'segment') {
+    segments.push(ev);
+    const div = document.createElement('div');
+    div.className = 'seg';
+    div.innerHTML = `<span class="t">${ev.start}</span><span class="x"></span>`;
+    div.querySelector('.x').textContent = ev.text;
+    outputEl.appendChild(div);
+    div.scrollIntoView({ block: 'nearest' });
+    copyBtn.disabled = false;
+    downloadBtn.disabled = false;
+  } else if (ev.type === 'done') {
+    setStatus('✓ Transcripción completa (' + segments.length + ' segmentos)', 'ok');
+  } else if (ev.type === 'error') {
+    setStatus('⚠️ ' + ev.message, 'err');
+  }
+}
+
+function formatDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}m ${sec}s`;
+}
+
+function plainText() {
+  return segments.map(s => `[${s.start}] ${s.text}`).join('\n');
+}
+
+copyBtn.addEventListener('click', async () => {
+  await navigator.clipboard.writeText(plainText());
+  copyBtn.textContent = '¡Copiado!';
+  setTimeout(() => copyBtn.textContent = 'Copiar', 1500);
+});
+
+downloadBtn.addEventListener('click', () => {
+  const blob = new Blob([plainText()], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : 'transcripcion') + '.txt';
+  a.click();
+});
+</script>
+</body>
+</html>
