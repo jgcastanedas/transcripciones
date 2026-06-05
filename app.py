@@ -62,24 +62,33 @@ def extract_audio(video_path: str, audio_path: str) -> None:
 
 def split_video(video_path: str, chunk_seconds: int, out_dir: str):
     """Divide el video en partes de chunk_seconds sin recodificar. Devuelve lista ordenada de paths."""
+    total = get_video_duration(video_path)
+    if total <= 0:
+        raise RuntimeError("No se pudo determinar la duración del video")
+
     ext = os.path.splitext(video_path)[1] or ".mp4"
-    pattern = os.path.join(out_dir, f"chunk_%03d{ext}")
-    result = subprocess.run(
-        ["ffmpeg", "-i", video_path,
-         "-c", "copy",
-         "-f", "segment",
-         "-segment_time", str(chunk_seconds),
-         "-reset_timestamps", "1",
-         pattern],
-        capture_output=True, timeout=600,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
-    return sorted(
-        os.path.join(out_dir, f)
-        for f in os.listdir(out_dir)
-        if f.startswith("chunk_")
-    )
+    chunks = []
+    offset = 0.0
+    idx = 0
+
+    while offset < total:
+        chunk_path = os.path.join(out_dir, f"chunk_{idx:03d}{ext}")
+        result = subprocess.run(
+            ["ffmpeg", "-y",
+             "-ss", str(offset),
+             "-i", video_path,
+             "-t", str(chunk_seconds),
+             "-c", "copy",
+             chunk_path],
+            capture_output=True, timeout=600,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace").strip())
+        chunks.append(chunk_path)
+        offset += chunk_seconds
+        idx += 1
+
+    return chunks
 
 
 def get_video_duration(video_path: str) -> float:
